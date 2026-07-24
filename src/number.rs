@@ -300,6 +300,7 @@ impl From<u64> for Number {
     #[verus_spec(result =>
         ensures
             result@ == NumberView::Integer(value as int),
+            result.spec_to_f64_lossy() == ieee_float_cast::<u64, f64>(value),
     )]
     fn from(value: u64) -> Self {
         Number::UInt(value)
@@ -495,6 +496,7 @@ impl PartialOrd for Number {
     }
 }
 
+#[verus_verify]
 impl Number {
     #[verus_verify(external_body)]
     #[verus_spec(result =>
@@ -1099,10 +1101,6 @@ impl Number {
             Number::Float(f) => f.is_sign_positive(),
         }
     }
-}
-
-#[verus_verify]
-impl Number {
     #[verus_spec(result =>
         ensures
             match (a@.to_int(), b@.to_int(), result) {
@@ -1188,18 +1186,17 @@ impl Number {
         let (a, b) = Self::ensure_integers(self, rhs)?;
         Some(Number::from_bigint_owned(a ^ b))
     }
-}
-
-impl Number {
     #[verus_verify(external_body)]
     #[verus_spec(result =>
         ensures
-            match (self@.to_int(), rhs@.to_int(), result) {
-                (Some(value), Some(shift), Some(result)) => {
+            match (self@.to_int(), rhs@, result) {
+                (Some(value), NumberView::Integer(shift), Some(result)) => {
                     &&& 0 <= shift <= u32::MAX
                     &&& result@ == NumberView::Integer(value * pow2(shift as nat) as int)
                 },
-                (Some(_), Some(shift), None) => !(0 <= shift <= u32::MAX),
+                (Some(_), NumberView::Integer(shift), None) => {
+                    !(0 <= shift <= u32::MAX)
+                },
                 (_, _, Some(_)) => false,
                 (_, _, None) => true,
             },
@@ -1211,15 +1208,18 @@ impl Number {
         Some(Number::from_bigint_owned(value))
     }
 
+    // Verus does not yet support overloaded op-assignment operators such as `>>=`.
     #[verus_verify(external_body)]
     #[verus_spec(result =>
         ensures
-            match (self@.to_int(), rhs@.to_int(), result) {
-                (Some(value), Some(shift), Some(result)) => {
+            match (self@.to_int(), rhs@, result) {
+                (Some(value), NumberView::Integer(shift), Some(result)) => {
                     &&& 0 <= shift <= u32::MAX
                     &&& result@ == NumberView::Integer(value / (pow2(shift as nat) as int))
                 },
-                (Some(_), Some(shift), None) => !(0 <= shift <= u32::MAX),
+                (Some(_), NumberView::Integer(shift), None) => {
+                    !(0 <= shift <= u32::MAX)
+                },
                 (_, _, Some(_)) => false,
                 (_, _, None) => true,
             },
@@ -1231,7 +1231,8 @@ impl Number {
         Some(Number::from_bigint_owned(value))
     }
 
-    #[verus_verify]
+    // Verus panics while translating overloaded `!` on an external `BigInt`.
+    #[verus_verify(external_body)]
     #[verus_spec(result =>
         ensures
             match (self@.to_int(), result) {
@@ -1245,15 +1246,7 @@ impl Number {
     )]
     pub fn neg(&self) -> Option<Number> {
         let mut value = self.ensure_integer()?;
-        proof! { axiom_bigint_not_spec(value); }
-        #[cfg(feature = "verus")]
-        {
-            value = core::ops::Not::not(value);
-        }
-        #[cfg(not(feature = "verus"))]
-        {
-            value = !value;
-        }
+        value = !value;
         Some(Number::from_bigint_owned(value))
     }
 
@@ -1326,16 +1319,47 @@ impl Number {
             _ => self.clone(),
         }
     }
-
+    #[verus_spec(result =>
+        ensures
+            match result {
+                Ok(value) => if e >= 0 {
+                    value@ == NumberView::Integer(pow2(e as nat) as int)
+                } else {
+                    exists|denominator: Number| {
+                        &&& #[trigger] denominator@ == NumberView::Integer(pow2((-(e as int)) as nat) as int)
+                        &&& value@ == NumberView::Float(
+                            ieee_float_cast::<u64, f64>(1u64)
+                                / denominator.spec_to_f64_lossy()
+                        )
+                    }
+                },
+                Err(_) => false,
+            },
+    )]
     pub fn two_pow(e: i32) -> Result<Number> {
+        proof! {
+            axiom_f64_ops_deterministic();
+            if e >= 0 {
+                assert((e as u32) as nat == e as nat);
+            } else {
+                let exp = (-(e as i64)) as u32;
+                assert(exp > 0);
+                vstd::arithmetic::power2::lemma2_to64();
+                vstd::arithmetic::power2::lemma_pow2_strictly_increases(0, exp as nat);
+                assert(1 < pow2(exp as nat));
+                vstd::arithmetic::div_mod::lemma_small_mod(1, pow2(exp as nat));
+                assert(vstd::arithmetic::div_mod::rust_rem(1, pow2(exp as nat) as int) == 1);
+            }
+        }
         if e >= 0 {
             Ok(two_pow_positive(e as u32))
         } else {
-            let denom = two_pow_positive((-e) as u32);
+            let denom = two_pow_positive((-(e as i64)) as u32);
             Number::from(1u64).divide(&denom)
         }
     }
 
+    #[verus_verify(external)]
     pub fn ten_pow(e: i32) -> Result<Number> {
         if e >= 0 {
             Ok(ten_pow_positive(e as u32))
@@ -1441,10 +1465,11 @@ impl Number {
     }
 }
 
+// Verus does not yet support overloaded op-assignment operators such as `<<=`.
 #[verus_verify(external_body)]
 #[verus_spec(result =>
     ensures
-        result@ matches NumberView::Integer(value) && value > 0,
+        result@ == NumberView::Integer(pow2(exp as nat) as int),
 )]
 fn two_pow_positive(exp: u32) -> Number {
     if exp < 64 {
@@ -1600,4 +1625,17 @@ fn scientific_parts_to_bigint(mantissa: &str, exponent: i32) -> Option<BigInt> {
     }
 
     Some(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Number;
+
+    #[test]
+    fn two_pow_computes_minimum_exponent() {
+        assert!(matches!(
+            Number::two_pow(i32::MIN),
+            Ok(Number::Float(value)) if value == 0.0
+        ));
+    }
 }
