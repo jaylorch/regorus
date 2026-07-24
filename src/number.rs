@@ -498,7 +498,6 @@ impl PartialOrd for Number {
 
 #[verus_verify]
 impl Number {
-    #[verus_verify(external_body)]
     #[verus_spec(result =>
         ensures
             match self@ {
@@ -545,7 +544,6 @@ impl Number {
         }
     }
 
-    #[verus_verify(external_body)]
     #[verus_spec(result =>
         ensures
             match self@ {
@@ -740,6 +738,7 @@ impl Number {
         self.to_bigint_rc()
     }
 
+    // Verus does not support the formatting internals used by `anyhow!`.
     #[verus_verify(external_body)]
     #[verus_spec(result =>
         ensures
@@ -825,6 +824,7 @@ impl Number {
         Ok(())
     }
 
+    // Verus does not yet support overloaded op-assignment operators like `-=`.
     #[verus_verify(external_body)]
     #[verus_spec(result =>
         ensures
@@ -883,19 +883,33 @@ impl Number {
         Ok(())
     }
 
-    #[verus_verify(external_body)]
     #[verus_spec(result =>
         ensures
             result matches Ok(value) && self@.mul_ensures(rhs@, value@),
     )]
     pub fn mul(&self, rhs: &Self) -> Result<Number> {
-        if matches!(self, Number::Float(_)) || matches!(rhs, Number::Float(_)) {
-            return Ok(Number::normalize_float(
-                self.to_f64_lossy() * rhs.to_f64_lossy(),
-            ));
+        proof! {
+            axiom_f64_ops_deterministic();
+            axiom_bigint_obeys_mul_spec();
+            reveal(NumberView::integer_value);
+            reveal(NumberView::mul_ensures);
+            assert(forall|lhs: int, rhs_value: int|
+                self@.integer_value() == Some(lhs)
+                    && rhs@.integer_value() == Some(rhs_value)
+                ==> self@.mul_ensures(
+                    rhs@,
+                    NumberView::Integer(lhs * rhs_value),
+                ));
+            if let (Number::UInt(lhs), Number::UInt(rhs_value)) = (self, rhs) {
+                assert((*lhs as int) * (*rhs_value as int) <= u128::MAX as int)
+                    by(nonlinear_arith);
+            }
         }
 
         match (self, rhs) {
+            (Number::Float(_), _) | (_, Number::Float(_)) => Ok(Number::normalize_float(
+                self.to_f64_lossy() * rhs.to_f64_lossy(),
+            )),
             (Number::UInt(a), Number::UInt(b)) => {
                 let product = (*a as u128) * (*b as u128);
                 if let Ok(v) = u64::try_from(product) {
@@ -931,7 +945,6 @@ impl Number {
                 let product = (**a).clone() * other.to_bigint_owned().unwrap();
                 Ok(Number::from_bigint_owned(product))
             }
-            _ => unreachable!(),
         }
     }
 
