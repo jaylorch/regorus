@@ -10,6 +10,7 @@ use alloc::collections::BTreeSet;
 use core::cmp::Ordering;
 use core::fmt;
 use core::ops::Bound;
+use vstd::prelude::*;
 
 use crate::value::Value;
 
@@ -29,6 +30,8 @@ pub use iter::{IntoIter, Iter};
 /// - [`Set::cursor`] / [`Set::next`] — implementation-defined order,
 ///   resumable; cheapest per-step cost. Used by interpreter/RVM when iteration
 ///   must yield mid-flight.
+#[verus_verify]
+#[verus_verify(external_derive)]
 #[derive(Default, Clone, Eq, PartialEq)]
 pub struct Set {
     inner: BTreeSet<Value>,
@@ -268,4 +271,24 @@ impl From<Set> for Value {
     fn from(s: Set) -> Self {
         s.into_value()
     }
+}
+
+#[cfg(verus_keep_ghost)]
+verus! {
+
+use super::specs::ValueView;
+
+pub closed spec fn value_set_view(s: Set) -> vstd::set::Set<ValueView>
+    decreases
+        s,
+{
+    s.inner@.map(|element: Value|
+        if s.inner@.contains(element) {
+            element@
+        } else {
+            ValueView::Undefined
+        }
+    )
+}
+
 }

@@ -69,6 +69,14 @@ honest trusted boundary.
      unrelated to the executable receiver.
 
 6. **Minimize and explain trust.**
+   - Never add or modify an axiom without prior human approval. Before editing,
+     present the exact proposed axiom statement, explain why it is needed and
+     what proof alternatives were tried, then wait for explicit approval. This
+     applies to changing an axiom's preconditions, postconditions, triggers, or
+     type parameters as well as creating or replacing an axiom.
+   - Never add an `external_body` helper without prior human approval. Present
+     its exact signature and contract, explain why it is needed and what proof
+     alternatives were tried, then wait for explicit approval before editing.
    - Use `external_body` only at the smallest unsupported boundary.
    - Give an exact postcondition, not merely positivity or successful return,
      whenever downstream proofs depend on exact behavior.
@@ -264,11 +272,15 @@ First trace a concrete input through the runtime behavior.
 After the first substantive edit, immediately run the narrowest check:
 
 ```bash
-cargo verus verify \
-  --fwd-verus-args-to roots -- --verify-module number
+cargo-verus focus \
+  --target-dir target/verus-focused-module \
+  --fwd-verus-args-to roots -- --verify-module value::proofs
 ```
 
-Use a fresh target directory when checking for stale macro or compiler behavior.
+`cargo-verus focus` can reuse the module selection cached in an existing target
+directory. Read the `note: verifying module ...` line rather than trusting the
+command alone. If it names the wrong module, use a fresh target directory and
+rerun. Also use a fresh target when checking stale macro or compiler behavior.
 
 After the focused proof passes:
 
@@ -302,6 +314,7 @@ Report verification counts accurately. Distinguish:
 - [ ] Proof-only code is inside `proof!` and placed early when possible.
 - [ ] No redundant uninterpreted helper or trusted assumption remains.
 - [ ] Every `external_body` has the narrowest useful exact contract and a reason.
+- [ ] Recursive calls in total spec closures have explicit domain or bounds guards.
 - [ ] Impl-level verification annotations cover the intended methods without
       unnecessary splits.
 - [ ] Any claimed verifier reproducer is representative and independently fails.

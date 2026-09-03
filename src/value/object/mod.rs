@@ -24,6 +24,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use core::cmp::Ordering;
 use core::fmt;
+use vstd::prelude::*;
 
 use crate::value::Value;
 
@@ -45,11 +46,15 @@ pub use iter::{IntoIter, Iter, IterMut};
 /// - [`Object::cursor`] / [`Object::next`] — implementation-defined order,
 ///   resumable; cheapest per-step cost. Used by interpreter/RVM when iteration
 ///   must yield mid-flight.
+#[verus_verify]
+#[verus_verify(external_derive)]
 #[derive(Default, Clone)]
 pub struct Object {
     pub(super) repr: Repr,
 }
 
+#[verus_verify]
+#[verus_verify(external_derive)]
 #[derive(Clone)]
 pub(super) enum Repr {
     Empty,

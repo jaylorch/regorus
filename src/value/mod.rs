@@ -13,7 +13,11 @@
 
 mod array;
 mod object;
+#[cfg(verus_keep_ghost)]
+mod proofs;
 mod set;
+#[cfg(verus_keep_ghost)]
+mod specs;
 
 #[cfg(feature = "std")]
 mod interning;
@@ -47,6 +51,7 @@ use anyhow::{anyhow, bail, Result};
 use serde::de::{self, Deserializer, Error as DeError, MapAccess, SeqAccess, Visitor};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
+use vstd::prelude::*;
 
 use crate::*;
 
@@ -60,6 +65,8 @@ use crate::*;
 ///    - [`Value::Number`] has at least 100 digits of precision for computations.
 ///
 /// Value can be efficiently cloned due to the use of reference counting.
+#[verus_verify]
+#[verus_verify(external_derive)]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Value {
     /// JSON null.

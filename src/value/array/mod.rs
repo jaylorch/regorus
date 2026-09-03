@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt;
 use core::ops;
+use vstd::prelude::*;
 
 use crate::value::Value;
 
@@ -19,6 +20,8 @@ pub use iter::{ArrayIntoIter, ArrayIter, ArrayIterMut};
 ///
 /// The current backing storage is `Vec<Value>`. The inner field is private so
 /// the representation can change without touching call sites.
+#[verus_verify]
+#[verus_verify(external_derive)]
 #[derive(Default, Clone, Eq, PartialEq)]
 pub struct Array {
     inner: Vec<Value>,
@@ -223,4 +226,24 @@ impl From<Array> for Value {
     fn from(a: Array) -> Self {
         a.into_value()
     }
+}
+
+#[cfg(verus_keep_ghost)]
+verus! {
+
+use super::specs::ValueView;
+
+pub closed spec fn value_array_view(a: Array) -> Seq<ValueView>
+    decreases
+        a,
+{
+    Seq::new(a.inner@.len(), |index: int|
+        if 0 <= index < a.inner@.len() {
+            a.inner@[index]@
+        } else {
+            ValueView::Undefined
+        }
+    )
+}
+
 }
