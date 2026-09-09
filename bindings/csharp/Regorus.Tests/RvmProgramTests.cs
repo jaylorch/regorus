@@ -2,6 +2,8 @@
 // Licensed under the MIT License.
 
 using System;
+using System.Collections.Generic;
+using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace Regorus.Tests;
@@ -57,6 +59,16 @@ allow if {
 }
 """;
 
+    private const string CumulativeHostAwaitPolicy = """
+package demo
+import rego.v1
+
+result := __builtin_host_await(
+  __builtin_host_await(input.value, "first"),
+  "second"
+)
+""";
+
     [TestMethod]
     public void Program_compile_and_execute_succeeds()
     {
@@ -78,6 +90,90 @@ allow if {
 
         var result = vm.Execute();
         Assert.AreEqual("true", result, "expected allow=true");
+    }
+
+    [TestMethod]
+    public void SetMaxInstructions_zero_stops_execution_and_is_per_vm()
+    {
+        var modules = new[] { new PolicyModule("demo.rego", Policy) };
+        var entryPoints = new[] { "data.demo.allow" };
+        using var program = Program.CompileFromModules(Data, modules, entryPoints);
+
+        using var limitedVm = new Rvm();
+        limitedVm.SetMaxInstructions(0);
+        limitedVm.LoadProgram(program);
+        limitedVm.SetDataJson(Data);
+        limitedVm.SetInputJson(Input);
+        Assert.ThrowsException<InvalidOperationException>(
+            () => limitedVm.Execute(),
+            "zero must prohibit every instruction dispatch");
+
+        using var independentVm = new Rvm();
+        independentVm.LoadProgram(program);
+        independentVm.SetDataJson(Data);
+        independentVm.SetInputJson(Input);
+        Assert.AreEqual("true", independentVm.Execute(), "VM limits must not be shared");
+    }
+
+    [TestMethod]
+    public void SetMaxInstructions_replacement_applies_to_a_fresh_execution()
+    {
+        var modules = new[] { new PolicyModule("demo.rego", Policy) };
+        var entryPoints = new[] { "data.demo.allow" };
+        using var program = Program.CompileFromModules(Data, modules, entryPoints);
+        using var vm = new Rvm();
+
+        vm.SetMaxInstructions(0);
+        vm.LoadProgram(program);
+        vm.SetDataJson(Data);
+        vm.SetInputJson(Input);
+        Assert.ThrowsException<InvalidOperationException>(() => vm.Execute());
+
+        vm.SetMaxInstructions(1000);
+        Assert.AreEqual("true", vm.Execute(), "a fresh execution should start with zero consumed instructions");
+    }
+
+    [TestMethod]
+    public void Execute_after_success_starts_a_fresh_execution()
+    {
+        var modules = new[] { new PolicyModule("demo.rego", Policy) };
+        var entryPoints = new[] { "data.demo.allow" };
+        using var program = Program.CompileFromModules(Data, modules, entryPoints);
+        using var vm = new Rvm();
+        vm.SetMaxInstructions(1000);
+        vm.LoadProgram(program);
+        vm.SetDataJson(Data);
+        vm.SetInputJson(Input);
+
+        Assert.AreEqual("true", vm.Execute());
+        vm.SetInputJson(Input.Replace("\"alice\"", "\"bob\"", StringComparison.Ordinal));
+        Assert.AreEqual("false", vm.Execute(), "a successful execution must not consume the next fresh execution");
+    }
+
+    [TestMethod]
+    public void SetMaxInstructions_preserves_native_width_and_rejects_32_bit_overflow()
+    {
+        using var vm = new Rvm();
+
+        if (IntPtr.Size == 4)
+        {
+            Assert.ThrowsException<ArgumentOutOfRangeException>(
+                () => vm.SetMaxInstructions((ulong)uint.MaxValue + 1),
+                "values wider than native usize must not be truncated");
+        }
+        else
+        {
+            vm.SetMaxInstructions(ulong.MaxValue);
+        }
+    }
+
+    [TestMethod]
+    public void SetMaxInstructions_rejects_a_disposed_vm()
+    {
+        var vm = new Rvm();
+        vm.Dispose();
+
+        Assert.ThrowsException<ObjectDisposedException>(() => vm.SetMaxInstructions(1));
     }
 
     [TestMethod]
@@ -116,4 +212,559 @@ allow if {
         var resumed = vm.Resume("{\"tier\":\"gold\"}");
         Assert.AreEqual("true", resumed, "expected allow=true after resume");
     }
+
+    [TestMethod]
+    public void SetMaxInstructions_host_await_resume_preserves_consumed_count()
+    {
+        var modules = new[] { new PolicyModule("host_await.rego", HostAwaitPolicy) };
+        var entryPoints = new[] { "data.demo.allow" };
+
+        using var program = Program.CompileFromModules("{}", modules, entryPoints);
+        using var vm = new Rvm();
+        vm.SetExecutionMode(ExecutionMode.Suspendable);
+        vm.SetMaxInstructions(1000);
+        vm.LoadProgram(program);
+        vm.SetInputJson(HostAwaitInput);
+
+        vm.Execute();
+        StringAssert.Contains(vm.GetExecutionState()!, "HostAwait");
+
+        vm.SetMaxInstructions(0);
+        Assert.ThrowsException<InvalidOperationException>(
+            () => vm.Resume("{\"tier\":\"gold\"}"),
+            "lowering a suspended VM below its consumed count must reject the next dispatch");
+        Assert.IsTrue(
+            vm.GetExecutionState()!.Contains("Error", StringComparison.Ordinal),
+            "instruction exhaustion must leave the VM in Error state");
+        Assert.ThrowsException<InvalidOperationException>(
+            () => vm.Resume("{\"tier\":\"gold\"}"),
+            "Resume must be rejected after the VM enters Error state");
+
+        vm.SetMaxInstructions(1000);
+        vm.SetInputJson("""
+{
+  "account": {
+    "id": "acct-2",
+    "active": true
+  }
+}
+""");
+        vm.Execute();
+        StringAssert.Contains(vm.GetHostAwaitArgument()!, "acct-2");
+        Assert.AreEqual("true", vm.Resume("{\"tier\":\"gold\"}"));
+    }
+
+    [TestMethod]
+    public void SetMaxInstructions_supports_multiple_host_await_resumes()
+    {
+        var modules = new[] { new PolicyModule("multi.rego", MultiAwaitPolicy) };
+        var entryPoints = new[] { "data.demo.greeting" };
+        var hostAwaitBuiltins = new[]
+        {
+            new HostAwaitBuiltin("translate"),
+            new HostAwaitBuiltin("lookup_user"),
+        };
+
+        using var program = Program.CompileFromModules("{}", modules, entryPoints, hostAwaitBuiltins);
+        using var vm = new Rvm();
+        vm.SetExecutionMode(ExecutionMode.Suspendable);
+        vm.SetMaxInstructions(1000);
+        vm.LoadProgram(program);
+        vm.SetInputJson("{\"lang\":\"es\",\"user_id\":\"u1\"}");
+
+        vm.Execute();
+        StringAssert.Contains(vm.GetExecutionState()!, "HostAwait");
+
+        vm.Resume("\"hola\"");
+        StringAssert.Contains(vm.GetExecutionState()!, "HostAwait");
+
+        var result = vm.Resume("{\"name\":\"Alice\"}");
+        Assert.AreEqual("\"hola Alice\"", result);
+    }
+
+    [TestMethod]
+    public void SetMaxInstructions_counts_sequential_cross_thread_resume_cumulatively()
+    {
+        var modules = new[] { new PolicyModule("cumulative.rego", CumulativeHostAwaitPolicy) };
+        var entryPoints = new[] { "data.demo.result" };
+
+        using var program = Program.CompileFromModules("{}", modules, entryPoints);
+        var listing = GetListing(program);
+        AssertCumulativeHostAwaitListing(listing);
+
+        // The generated path is:
+        // E: PC 0, 2, 3, 4, 5, 6 -> first HostAwait (6 dispatches).
+        // R1: PC 7, 8 -> second HostAwait (2 dispatches).
+        // R2: PC 9, 10, 1 -> completion (3 dispatches).
+        const ulong executeToFirstSuspension = 6;
+        const ulong firstResumeToSecondSuspension = 2;
+        const ulong secondResumeToCompletion = 3;
+        const ulong positiveLimit = 8;
+
+        Assert.AreEqual(
+            positiveLimit,
+            executeToFirstSuspension + firstResumeToSecondSuspension);
+        Assert.IsTrue(
+            positiveLimit < executeToFirstSuspension
+                + firstResumeToSecondSuspension
+                + secondResumeToCompletion);
+        Assert.IsTrue(
+            firstResumeToSecondSuspension + secondResumeToCompletion <= positiveLimit);
+
+        Console.WriteLine(
+            $"RVM budget path: entry_points=[data.demo.result], listing_instructions=11, "
+            + $"E={executeToFirstSuspension}, R1={firstResumeToSecondSuspension}, "
+            + $"R2={secondResumeToCompletion}, N={positiveLimit}; "
+            + "E+R1<=N<E+R1+R2 and R1+R2<=N.");
+
+        using var vm = new Rvm();
+        vm.SetExecutionMode(ExecutionMode.Suspendable);
+        vm.SetMaxInstructions(positiveLimit);
+        vm.LoadProgram(program);
+        vm.SetInputJson("{\"value\":\"initial\"}");
+
+        using var executeFinished = new ManualResetEventSlim();
+        using var resumeFinished = new ManualResetEventSlim();
+        Exception? executeError = null;
+        Exception? firstResumeError = null;
+        Exception? secondResumeError = null;
+        var executeThreadId = -1;
+        var resumeThreadId = -1;
+        var firstResumeState = string.Empty;
+
+        var executeThread = new Thread(() =>
+        {
+            try
+            {
+                vm.Execute();
+                executeThreadId = Thread.CurrentThread.ManagedThreadId;
+            }
+            catch (Exception ex)
+            {
+                executeError = ex;
+            }
+            finally
+            {
+                executeFinished.Set();
+            }
+
+            if (!resumeFinished.Wait(TimeSpan.FromSeconds(30)))
+            {
+                executeError ??= new TimeoutException("Resume thread did not complete.");
+            }
+        });
+
+        var resumeThread = new Thread(() =>
+        {
+            try
+            {
+                if (!executeFinished.Wait(TimeSpan.FromSeconds(30)))
+                {
+                    throw new TimeoutException("Execute thread did not complete.");
+                }
+
+                resumeThreadId = Thread.CurrentThread.ManagedThreadId;
+                vm.Resume("\"first\"");
+            }
+            catch (Exception ex)
+            {
+                firstResumeError = ex;
+            }
+
+            if (firstResumeError is null)
+            {
+                firstResumeState = vm.GetExecutionState()!;
+                try
+                {
+                    vm.Resume("\"second\"");
+                }
+                catch (Exception ex)
+                {
+                    secondResumeError = ex;
+                }
+            }
+
+            resumeFinished.Set();
+        });
+
+        executeThread.Start();
+        resumeThread.Start();
+        executeThread.Join();
+        resumeThread.Join();
+
+        Assert.IsNull(executeError, executeError?.ToString());
+        Assert.IsNull(firstResumeError, firstResumeError?.ToString());
+        Assert.IsNotNull(secondResumeError, "cumulative execution must exhaust the positive limit");
+        Assert.AreNotEqual(executeThreadId, resumeThreadId, "continuation must use distinct threads");
+        StringAssert.Contains(firstResumeState, "HostAwait");
+        StringAssert.Contains(vm.GetExecutionState() ?? string.Empty, "InstructionLimitExceeded");
+    }
+
+    private static string GetListing(Program program)
+    {
+        var listing = program.GenerateListing();
+        Assert.IsNotNull(listing);
+        return listing!;
+    }
+
+    private static void AssertCumulativeHostAwaitListing(string listing)
+    {
+        var expectedInstructions = new[]
+        {
+            "; RVM Assembly - 11 instructions, 3 literals, 0 builtins",
+            "000: CallRule",
+            "001: Return",
+            "002: RuleInit",
+            "003:     LoadInput",
+            "004:     IndexLiteral",
+            "005:     Load",
+            "006:     HostAwait",
+            "007:     Load",
+            "008:     HostAwait",
+            "009:     Move",
+            "010: } return from rule",
+        };
+
+        foreach (var expectedInstruction in expectedInstructions)
+        {
+            StringAssert.Contains(
+                listing,
+                expectedInstruction,
+                $"compiled RVM listing changed; missing '{expectedInstruction}'");
+        }
+    }
+
+    private const string GetAccountPolicy = """
+package demo
+import rego.v1
+
+default allow := false
+
+allow if {
+  account := get_account({"id": input.account_id})
+  account.status == "active"
+}
+""";
+
+    [TestMethod]
+    public void RegisteredHostAwait_Suspendable_SuspendAndResume()
+    {
+        var modules = new[] { new PolicyModule("account.rego", GetAccountPolicy) };
+        var entryPoints = new[] { "data.demo.allow" };
+        var hostAwaitBuiltins = new[] { new HostAwaitBuiltin("get_account") };
+
+        using var program = Program.CompileFromModules("{}", modules, entryPoints, hostAwaitBuiltins);
+        using var vm = new Rvm();
+        vm.SetExecutionMode(ExecutionMode.Suspendable);
+        vm.LoadProgram(program);
+        vm.SetInputJson("{\"account_id\": \"acct-42\"}");
+
+        // Execute — should suspend on get_account()
+        vm.Execute();
+
+        // Verify we're suspended due to HostAwait with identifier "get_account".
+        var identifier = vm.GetHostAwaitIdentifier();
+        Assert.AreEqual("get_account", identifier, "expected identifier to be get_account");
+
+        var argument = vm.GetHostAwaitArgument();
+        Assert.IsNotNull(argument, "expected non-null argument");
+        StringAssert.Contains(argument!, "acct-42", "expected account_id in argument");
+
+        // Resume with an account response
+        var result = vm.Resume("{\"status\": \"active\", \"name\": \"Alice\"}");
+        Assert.AreEqual("true", result, "expected allow=true after resume");
+    }
+
+    private const string TranslatePolicy = """
+package demo
+import rego.v1
+
+default greeting := "unknown"
+
+greeting := msg if {
+  msg := translate(input.lang)
+}
+""";
+
+    [TestMethod]
+    public void RegisteredHostAwait_RunToCompletion_WithPreloadedResponses()
+    {
+        var modules = new[] { new PolicyModule("translate.rego", TranslatePolicy) };
+        var entryPoints = new[] { "data.demo.greeting" };
+        var hostAwaitBuiltins = new[] { new HostAwaitBuiltin("translate") };
+
+        using var program = Program.CompileFromModules("{}", modules, entryPoints, hostAwaitBuiltins);
+        using var vm = new Rvm();
+        vm.SetExecutionMode(ExecutionMode.RunToCompletion);
+        vm.LoadProgram(program);
+        vm.SetInputJson("{\"lang\": \"es\"}");
+
+        // Pre-load a response for translate
+        vm.SetHostAwaitResponses(new Dictionary<string, IReadOnlyList<string>>
+        {
+            ["translate"] = new[] { "\"hola\"" },
+        });
+
+        // Execute — translate returns "hola"
+        var result = vm.Execute();
+        Assert.AreEqual("\"hola\"", result, "expected greeting=hola");
+    }
+
+    [TestMethod]
+    public void RegisteredHostAwait_CompileRejectsEmptyOrWhitespaceName()
+    {
+        var modules = new[] { new PolicyModule("noop.rego", "package demo\nallow := true\n") };
+        var entryPoints = new[] { "data.demo.allow" };
+
+        foreach (var badName in new[] { "", "   ", "\t" })
+        {
+            var builtins = new[] { new HostAwaitBuiltin(badName) };
+            Assert.ThrowsException<InvalidOperationException>(
+                () => Program.CompileFromModules("{}", modules, entryPoints, builtins),
+                $"expected compilation to reject empty/whitespace name '{badName}'");
+        }
+    }
+
+    [TestMethod]
+    public void RegisteredHostAwait_CompileRejectsDuplicateRegistration()
+    {
+        var modules = new[] { new PolicyModule("noop.rego", "package demo\nallow := true\n") };
+        var entryPoints = new[] { "data.demo.allow" };
+        var builtins = new[]
+        {
+            new HostAwaitBuiltin("translate"),
+            new HostAwaitBuiltin("translate"),
+        };
+
+        Assert.ThrowsException<InvalidOperationException>(
+            () => Program.CompileFromModules("{}", modules, entryPoints, builtins),
+            "expected compilation to reject duplicate registration");
+    }
+
+    [TestMethod]
+    public void RegisteredHostAwait_CompileRejectsReservedName()
+    {
+        var modules = new[] { new PolicyModule("noop.rego", "package demo\nallow := true\n") };
+        var entryPoints = new[] { "data.demo.allow" };
+        var builtins = new[] { new HostAwaitBuiltin("__builtin_host_await") };
+
+        Assert.ThrowsException<InvalidOperationException>(
+            () => Program.CompileFromModules("{}", modules, entryPoints, builtins),
+            "expected compilation to reject reserved __builtin_host_await identifier");
+    }
+
+    public static IEnumerable<object[]> EmbeddedNulIdentifierScenarios()
+    {
+        // Identifiers (registration name + response key) are raw C strings with
+        // no downstream parser to catch truncation, so an embedded NUL would
+        // silently mis-route. Both write-points reject it.
+        yield return new object[]
+        {
+            "builtin name",
+            (Action)(() => _ = new HostAwaitBuiltin("bad\0name")),
+        };
+        yield return new object[]
+        {
+            "response identifier",
+            (Action)(() =>
+            {
+                using var vm = new Rvm();
+                vm.SetHostAwaitResponses(new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["bad\0id"] = new[] { "\"v\"" },
+                });
+            }),
+        };
+    }
+
+    // A raw NUL in an identifier is rejected loudly at the public surface,
+    // before Rust's CStr can silently truncate it.
+    [DataTestMethod]
+    [DynamicData(nameof(EmbeddedNulIdentifierScenarios), DynamicDataSourceType.Method)]
+    public void RegisteredHostAwait_RejectsEmbeddedNulInIdentifier(string description, Action action)
+    {
+        Assert.ThrowsException<ArgumentException>(
+            action,
+            $"expected embedded NUL in {description} to be rejected before crossing the FFI boundary");
+    }
+
+    // A JSON-escaped null (\u0000) is six ASCII chars, not a raw NUL, so it
+    // round-trips faithfully. Response values are not NUL-validated (client
+    // responsibility, consistent with other JSON inputs).
+    [TestMethod]
+    public void RegisteredHostAwait_ResponseValueWithEscapedNul_RoundTrips()
+    {
+        var modules = new[] { new PolicyModule("translate.rego", TranslatePolicy) };
+        var entryPoints = new[] { "data.demo.greeting" };
+        var hostAwaitBuiltins = new[] { new HostAwaitBuiltin("translate") };
+
+        using var program = Program.CompileFromModules("{}", modules, entryPoints, hostAwaitBuiltins);
+        using var vm = new Rvm();
+        vm.SetExecutionMode(ExecutionMode.RunToCompletion);
+        vm.LoadProgram(program);
+        vm.SetInputJson("{\"lang\": \"es\"}");
+
+        vm.SetHostAwaitResponses(new Dictionary<string, IReadOnlyList<string>>
+        {
+            ["translate"] = new[] { "\"a\\u0000b\"" },
+        });
+
+        var result = vm.Execute();
+
+        Assert.AreEqual("\"a\\u0000b\"", result);
+    }
+
+    // Same escaped-null round-trip on the resume path (customer-controlled JSON,
+    // not NUL-validated).
+    [TestMethod]
+    public void RegisteredHostAwait_ResumeValueWithEscapedNul_RoundTrips()
+    {
+        var modules = new[] { new PolicyModule("translate.rego", TranslatePolicy) };
+        var entryPoints = new[] { "data.demo.greeting" };
+        var hostAwaitBuiltins = new[] { new HostAwaitBuiltin("translate") };
+
+        using var program = Program.CompileFromModules("{}", modules, entryPoints, hostAwaitBuiltins);
+        using var vm = new Rvm();
+        vm.SetExecutionMode(ExecutionMode.Suspendable);
+        vm.LoadProgram(program);
+        vm.SetInputJson("{\"lang\": \"es\"}");
+
+        vm.Execute();
+        Assert.AreEqual("translate", vm.GetHostAwaitIdentifier());
+
+        var result = vm.Resume("\"a\\u0000b\"");
+
+        Assert.AreEqual("\"a\\u0000b\"", result);
+    }
+
+    // Failing scenario: a raw NUL in the resume value is not validated, but
+    // Rust's CStr truncates at it and the truncated text ("a) is invalid JSON,
+    // so it surfaces as a loud parse error. (A raw NUL that truncates to *valid*
+    // JSON — e.g. "123\0456" -> 123 — is silently accepted, the accepted
+    // binding-wide value contract shared with AddDataJson/SetInputJson.)
+    [TestMethod]
+    public void RegisteredHostAwait_ResumeValueWithRawNul_ThrowsFromParse()
+    {
+        var modules = new[] { new PolicyModule("translate.rego", TranslatePolicy) };
+        var entryPoints = new[] { "data.demo.greeting" };
+        var hostAwaitBuiltins = new[] { new HostAwaitBuiltin("translate") };
+
+        using var program = Program.CompileFromModules("{}", modules, entryPoints, hostAwaitBuiltins);
+        using var vm = new Rvm();
+        vm.SetExecutionMode(ExecutionMode.Suspendable);
+        vm.LoadProgram(program);
+        vm.SetInputJson("{\"lang\": \"es\"}");
+
+        vm.Execute();
+        Assert.AreEqual("translate", vm.GetHostAwaitIdentifier());
+
+        Assert.ThrowsException<InvalidOperationException>(
+            () => vm.Resume("\"a\0b\""),
+            "expected a raw NUL that truncates to invalid JSON to surface as a parse error");
+    }
+
+    [TestMethod]
+    public void RegisteredHostAwait_GetAccessorsReturnNullWhenVmIsNotSuspended()
+    {
+        var modules = new[] { new PolicyModule("translate.rego", TranslatePolicy) };
+        var entryPoints = new[] { "data.demo.greeting" };
+        var hostAwaitBuiltins = new[] { new HostAwaitBuiltin("translate") };
+
+        using var program = Program.CompileFromModules("{}", modules, entryPoints, hostAwaitBuiltins);
+        using var vm = new Rvm();
+        vm.SetExecutionMode(ExecutionMode.RunToCompletion);
+        vm.LoadProgram(program);
+        vm.SetInputJson("{\"lang\": \"es\"}");
+        vm.SetHostAwaitResponses(new Dictionary<string, IReadOnlyList<string>>
+        {
+            ["translate"] = new[] { "\"hola\"" },
+        });
+        vm.Execute();
+
+        // After run-to-completion completes successfully, the VM is no longer suspended.
+        Assert.IsNull(vm.GetHostAwaitArgument(), "expected null argument when VM is not suspended");
+        Assert.IsNull(vm.GetHostAwaitIdentifier(), "expected null identifier when VM is not suspended");
+    }
+
+    private const string TranslateNoDefaultPolicy = """
+package demo
+import rego.v1
+
+# No default — if translate() can't produce a value, the entry point
+# evaluation propagates the error to the caller.
+result := translate(input.lang)
+""";
+
+    [TestMethod]
+    public void RegisteredHostAwait_RunToCompletion_FailsWhenResponseQueueExhausted()
+    {
+        var modules = new[] { new PolicyModule("translate.rego", TranslateNoDefaultPolicy) };
+        var entryPoints = new[] { "data.demo.result" };
+        var hostAwaitBuiltins = new[] { new HostAwaitBuiltin("translate") };
+
+        using var program = Program.CompileFromModules("{}", modules, entryPoints, hostAwaitBuiltins);
+        using var vm = new Rvm();
+        vm.SetExecutionMode(ExecutionMode.RunToCompletion);
+        vm.LoadProgram(program);
+        vm.SetInputJson("{\"lang\": \"es\"}");
+
+        // No responses pre-loaded — translate has nothing to return.
+        // Document the actual behavior: in run-to-completion mode the
+        // missing-response error fails the rule body silently rather than
+        // surfacing as an exception, so Execute() returns the literal
+        // string `"<undefined>"` for an entry point that produced no value.
+        // Asserting the exact return value locks this contract so any
+        // future change (e.g. propagating an exception) shows up as a
+        // test failure that has to be explicitly re-acknowledged.
+        var actual = vm.Execute();
+        Assert.AreEqual(
+            "\"<undefined>\"",
+            actual,
+            "expected `\"<undefined>\"` when the response queue is exhausted");
+    }
+
+    private const string MultiAwaitPolicy = """
+package demo
+import rego.v1
+
+default greeting := "unknown"
+
+greeting := combined if {
+  hello := translate(input.lang)
+  user := lookup_user({"id": input.user_id})
+  combined := sprintf("%s %s", [hello, user.name])
+}
+""";
+
+    [TestMethod]
+    public void RegisteredHostAwait_RunToCompletion_MultipleIdentifiersInSingleCall()
+    {
+        var modules = new[] { new PolicyModule("multi.rego", MultiAwaitPolicy) };
+        var entryPoints = new[] { "data.demo.greeting" };
+        var hostAwaitBuiltins = new[]
+        {
+            new HostAwaitBuiltin("translate"),
+            new HostAwaitBuiltin("lookup_user"),
+        };
+
+        using var program = Program.CompileFromModules("{}", modules, entryPoints, hostAwaitBuiltins);
+        using var vm = new Rvm();
+        vm.SetExecutionMode(ExecutionMode.RunToCompletion);
+        vm.LoadProgram(program);
+        vm.SetInputJson("{\"lang\": \"es\", \"user_id\": \"u1\"}");
+
+        // Pre-load responses for BOTH identifiers in a single call.
+        // The new IReadOnlyDictionary API atomically replaces ALL prior
+        // responses, so this single call must carry every identifier the
+        // policy may invoke during this run.
+        vm.SetHostAwaitResponses(new Dictionary<string, IReadOnlyList<string>>
+        {
+            ["translate"] = new[] { "\"hola\"" },
+            ["lookup_user"] = new[] { "{\"name\": \"Alice\"}" },
+        });
+
+        var result = vm.Execute();
+        Assert.AreEqual("\"hola Alice\"", result, "expected combined greeting from both responses");
+    }
+
 }
