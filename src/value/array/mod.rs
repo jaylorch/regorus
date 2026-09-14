@@ -12,6 +12,9 @@ use core::fmt;
 use core::ops;
 use vstd::prelude::*;
 
+#[cfg(verus_keep_ghost)]
+use vstd::std_specs::iter::IteratorSpec;
+
 use crate::value::Value;
 
 pub use iter::{ArrayIntoIter, ArrayIter, ArrayIterMut};
@@ -137,7 +140,13 @@ impl Array {
 
     /// Iteration in element order. Non-resumable.
     #[inline]
-    #[verus_verify(external)]
+    #[verus_spec(result =>
+        ensures
+            value_seq_view(IteratorSpec::remaining(&result).unref()) == self@,
+            IteratorSpec::remaining(&result).unref() == result.elts(),
+            IteratorSpec::obeys_prophetic_iter_laws(&result),
+            IteratorSpec::decrease(&result) is Some,
+    )]
     pub fn iter(&self) -> ArrayIter<'_> {
         ArrayIter {
             inner: self.inner.iter(),
@@ -146,6 +155,22 @@ impl Array {
 
     #[inline]
     #[verus_verify(external)]
+    #[verus_spec(result =>
+        ensures
+            IteratorSpec::remaining(&result).len() == old(self)@.len(),
+            old(self)@.len() == final(self)@.len(),
+            forall|index: int| #![trigger IteratorSpec::remaining(&result)[index]]
+                0 <= index < old(self)@.len() ==>
+                    (*IteratorSpec::remaining(&result)[index])@ == old(self)@[index],
+            forall|index: int|
+                #![trigger IteratorSpec::remaining(&result)[index]]
+                #![trigger final(self)@[index]]
+                0 <= index < old(self)@.len() ==>
+                    (*final(IteratorSpec::remaining(&result)[index]))@ == final(self)@[index],
+            IteratorSpec::obeys_prophetic_iter_laws(&result),
+            IteratorSpec::will_return_none(&result),
+            IteratorSpec::decrease(&result) is Some,
+    )]
     pub fn iter_mut(&mut self) -> ArrayIterMut<'_> {
         ArrayIterMut {
             inner: self.inner.iter_mut(),
@@ -375,6 +400,8 @@ verus! {
 use super::specs::ValueView;
 use crate::verify::utils::*;
 use vstd::std_specs::convert::*;
+
+broadcast use iter::ArrayIter::reveal_model;
 
 impl FromSpecImpl<Vec<Value>> for Array {
     open spec fn obeys_from_spec() -> bool {

@@ -13,4 +13,8 @@ pub(crate) mod number_proofs;
 #[cfg(verus_keep_ghost)]
 pub mod number_specs;
 #[cfg(verus_keep_ghost)]
+pub(crate) mod slice_assumptions;
+#[cfg(verus_keep_ghost)]
 pub(crate) mod utils;
+#[cfg(verus_keep_ghost)]
+pub(crate) mod vec_assumptions;
