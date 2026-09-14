@@ -154,7 +154,6 @@ impl Array {
     }
 
     #[inline]
-    #[verus_verify(external)]
     #[verus_spec(result =>
         ensures
             IteratorSpec::remaining(&result).len() == old(self)@.len(),
@@ -172,6 +171,14 @@ impl Array {
             IteratorSpec::decrease(&result) is Some,
     )]
     pub fn iter_mut(&mut self) -> ArrayIterMut<'_> {
+        proof! {
+            broadcast use {
+                iter::ArrayIterMut::reveal_decrease,
+                iter::ArrayIterMut::reveal_model,
+                iter::ArrayIterMut::reveal_obeys,
+                iter::ArrayIterMut::reveal_will_return_none,
+            };
+        }
         ArrayIterMut {
             inner: self.inner.iter_mut(),
         }

@@ -97,11 +97,14 @@ impl<'a> ExactSizeIterator for ArrayIter<'a> {
 impl<'a> FusedIterator for ArrayIter<'a> {}
 
 /// Borrowed iterator over `&mut Value` elements.
+#[verus_verify]
+#[verus_verify(external_derive)]
 #[derive(Debug)]
 pub struct ArrayIterMut<'a> {
     pub(super) inner: slice::IterMut<'a, Value>,
 }
 
+#[verus_verify]
 impl<'a> Iterator for ArrayIterMut<'a> {
     type Item = &'a mut Value;
     #[inline]
@@ -109,11 +112,17 @@ impl<'a> Iterator for ArrayIterMut<'a> {
         self.inner.next()
     }
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            result.0 as int == IteratorSpec::remaining(self).len(),
+            result.1 == Some(result.0),
+    )]
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.inner.size_hint()
     }
 }
 
+#[verus_verify]
 impl<'a> DoubleEndedIterator for ArrayIterMut<'a> {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -121,6 +130,7 @@ impl<'a> DoubleEndedIterator for ArrayIterMut<'a> {
     }
 }
 
+#[verus_verify]
 impl<'a> ExactSizeIterator for ArrayIterMut<'a> {
     #[inline]
     fn len(&self) -> usize {
@@ -275,6 +285,80 @@ impl<'a> IteratorSpecImpl for ArrayIter<'a> {
         } else {
             None
         }
+    }
+}
+
+impl<'a> ArrayIterMut<'a> {
+    pub closed spec fn inner_exact_len(&self) -> usize {
+        self.inner.exact_len()
+    }
+
+    pub closed spec fn iter_wf(&self) -> bool {
+        IteratorSpec::obeys_prophetic_iter_laws(&self.inner)
+    }
+
+    pub(super) broadcast proof fn reveal_model(&self)
+        ensures
+            #[trigger] IteratorSpec::remaining(self)
+                == IteratorSpec::remaining(&self.inner),
+    {
+    }
+
+    pub(super) broadcast proof fn reveal_obeys(&self)
+        ensures
+            #[trigger] IteratorSpec::obeys_prophetic_iter_laws(self)
+                == IteratorSpec::obeys_prophetic_iter_laws(&self.inner),
+    {
+    }
+
+    pub(super) broadcast proof fn reveal_will_return_none(&self)
+        ensures
+            #[trigger] IteratorSpec::will_return_none(self)
+                == IteratorSpec::will_return_none(&self.inner),
+    {
+    }
+
+    pub(super) broadcast proof fn reveal_decrease(&self)
+        ensures
+            #[trigger] IteratorSpec::decrease(self)
+                == IteratorSpec::decrease(&self.inner),
+    {
+    }
+}
+
+impl<'a> IteratorSpecImpl for ArrayIterMut<'a> {
+    open spec fn obeys_prophetic_iter_laws(&self) -> bool {
+        self.iter_wf()
+    }
+
+    #[verifier::prophetic]
+    closed spec fn remaining(&self) -> Seq<Self::Item> {
+        IteratorSpec::remaining(&self.inner)
+    }
+
+    #[verifier::prophetic]
+    closed spec fn will_return_none(&self) -> bool {
+        IteratorSpec::will_return_none(&self.inner)
+    }
+
+    closed spec fn decrease(&self) -> Option<nat> {
+        IteratorSpec::decrease(&self.inner)
+    }
+
+    open spec fn peek(&self, _index: int) -> Option<Self::Item> {
+        None
+    }
+}
+
+impl<'a> ExactSizeIteratorSpecImpl for ArrayIterMut<'a> {
+    open spec fn exact_len(&self) -> usize {
+        self.inner_exact_len()
+    }
+}
+
+impl<'a> DoubleEndedIteratorSpecImpl for ArrayIterMut<'a> {
+    open spec fn peek_back(&self, _index: int) -> Option<Self::Item> {
+        None
     }
 }
 
