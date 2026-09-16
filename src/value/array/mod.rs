@@ -73,8 +73,6 @@ impl Array {
     }
 
     #[inline]
-    // We have to mark this one external until Verus issue #2902 is fixed.
-    #[verus_verify(external_body)]
     #[verus_spec(result =>
         ensures
             match result {
