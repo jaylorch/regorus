@@ -293,42 +293,23 @@ impl<'a> ArrayIterMut<'a> {
         self.inner.exact_len()
     }
 
-    pub closed spec fn iter_wf(&self) -> bool {
-        IteratorSpec::obeys_prophetic_iter_laws(&self.inner)
-    }
-
     pub(super) broadcast proof fn reveal_model(&self)
         ensures
-            #[trigger] IteratorSpec::remaining(self)
-                == IteratorSpec::remaining(&self.inner),
-    {
-    }
-
-    pub(super) broadcast proof fn reveal_obeys(&self)
-        ensures
-            #[trigger] IteratorSpec::obeys_prophetic_iter_laws(self)
-                == IteratorSpec::obeys_prophetic_iter_laws(&self.inner),
-    {
-    }
-
-    pub(super) broadcast proof fn reveal_will_return_none(&self)
-        ensures
-            #[trigger] IteratorSpec::will_return_none(self)
-                == IteratorSpec::will_return_none(&self.inner),
-    {
-    }
-
-    pub(super) broadcast proof fn reveal_decrease(&self)
-        ensures
-            #[trigger] IteratorSpec::decrease(self)
-                == IteratorSpec::decrease(&self.inner),
+            #![trigger IteratorSpec::remaining(self)]
+            #![trigger IteratorSpec::decrease(self)]
+            {
+                &&& IteratorSpec::remaining(self)
+                    == IteratorSpec::remaining(&self.inner)
+                &&& IteratorSpec::decrease(self)
+                    == IteratorSpec::decrease(&self.inner)
+            },
     {
     }
 }
 
 impl<'a> IteratorSpecImpl for ArrayIterMut<'a> {
     open spec fn obeys_prophetic_iter_laws(&self) -> bool {
-        self.iter_wf()
+        true
     }
 
     #[verifier::prophetic]
@@ -336,9 +317,8 @@ impl<'a> IteratorSpecImpl for ArrayIterMut<'a> {
         IteratorSpec::remaining(&self.inner)
     }
 
-    #[verifier::prophetic]
-    closed spec fn will_return_none(&self) -> bool {
-        IteratorSpec::will_return_none(&self.inner)
+    open spec fn will_return_none(&self) -> bool {
+        true
     }
 
     closed spec fn decrease(&self) -> Option<nat> {

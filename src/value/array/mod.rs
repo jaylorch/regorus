@@ -172,12 +172,7 @@ impl Array {
     )]
     pub fn iter_mut(&mut self) -> ArrayIterMut<'_> {
         proof! {
-            broadcast use {
-                iter::ArrayIterMut::reveal_decrease,
-                iter::ArrayIterMut::reveal_model,
-                iter::ArrayIterMut::reveal_obeys,
-                iter::ArrayIterMut::reveal_will_return_none,
-            };
+            broadcast use iter::ArrayIterMut::reveal_model;
         }
         ArrayIterMut {
             inner: self.inner.iter_mut(),
