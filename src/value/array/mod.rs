@@ -4,6 +4,8 @@
 //! See [`Array`].
 
 mod iter;
+#[cfg(verus_keep_ghost)]
+mod proofs;
 mod serde;
 
 use alloc::vec::Vec;
@@ -13,7 +15,7 @@ use core::ops;
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
-use vstd::std_specs::iter::IteratorSpec;
+use vstd::std_specs::iter::{into_iter_remaining, IteratorSpec};
 
 use crate::value::Value;
 
@@ -197,7 +199,11 @@ impl Array {
     }
 
     #[inline]
-    #[verus_verify(external_body)]
+    #[verus_spec(
+        ensures
+            final(self)@ == old(self)@
+                + value_seq_view(into_iter_remaining::<Value, I>(iter)),
+    )]
     pub fn extend<I: IntoIterator<Item = Value>>(&mut self, iter: I) {
         self.inner.extend(iter);
     }
@@ -213,12 +219,45 @@ impl Array {
     }
 
     #[inline]
-    #[verus_verify(external_body)]
+    #[verus_spec(
+        with
+            Ghost(view_predicate): Ghost<ValueViewPredicate>
+        requires
+            forall|value: Value|
+                #[trigger] call_requires(f, (&value,)),
+            forall|value: Value, keep: bool|
+                #[trigger] call_ensures(f, (&value,), keep) ==>
+                    keep == view_predicate(value@),
+        ensures
+            final(self)@ == old(self)@.filter(view_predicate),
+    )]
     pub fn retain<F>(&mut self, f: F)
     where
         F: FnMut(&Value) -> bool,
     {
+        proof_decl! {
+            let ghost predicate = f;
+        }
+        proof! {
+            reveal(value_array_view);
+        }
         self.inner.retain(f);
+        proof! {
+            let keep = choose|keep: Seq<bool>|
+                crate::verify::vec_assumptions::seq_retain_ensures(
+                    old(self).inner@,
+                    predicate,
+                    self.inner@,
+                    keep,
+                );
+            proofs::lemma_seq_retain_view(
+                old(self).inner@,
+                predicate,
+                self.inner@,
+                keep,
+                view_predicate,
+            );
+        }
     }
 
     #[inline]
@@ -231,15 +270,30 @@ impl Array {
     }
 
     #[inline]
-    #[verus_verify(external_body)]
+    #[verus_spec(
+        ensures
+            final(self)@ == old(self)@.reverse(),
+    )]
     pub fn reverse(&mut self) {
         self.inner.reverse();
     }
 
     #[inline]
-    #[verus_verify(external_body)]
+    #[verus_spec(
+        ensures
+            final(self)@.to_multiset() == old(self)@.to_multiset(),
+    )]
     pub fn sort(&mut self) {
+        proof_decl! {
+            let ghost old_elements = self.inner@;
+        }
+        proof! {
+            reveal(value_array_view);
+        }
         self.inner.sort();
+        proof! {
+            proofs::lemma_value_seq_view_multiset(old_elements, self.inner@);
+        }
     }
 
     #[inline]
@@ -403,6 +457,8 @@ use vstd::std_specs::convert::*;
 
 broadcast use iter::ArrayIter::reveal_model;
 
+pub type ValueViewPredicate = spec_fn(ValueView) -> bool;
+
 impl FromSpecImpl<Vec<Value>> for Array {
     open spec fn obeys_from_spec() -> bool {
         true
@@ -423,7 +479,7 @@ impl FromSpecImpl<Array> for Value {
     }
 }
 
-pub closed spec fn value_seq_view(values: Seq<Value>) -> Seq<ValueView>
+pub open spec fn value_seq_view(values: Seq<Value>) -> Seq<ValueView>
     decreases
         values,
 {
