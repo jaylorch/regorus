@@ -22,6 +22,7 @@ use crate::number::*;
 use crate::value::*;
 use crate::verify::number_proofs::*;
 use crate::verify::number_specs::*;
+use vstd::std_specs::convert::*;
 
 pub assume_specification[ <Value as Clone>::clone ](v: &Value) -> (res: Value)
     ensures
@@ -43,6 +44,50 @@ pub enum ValueView {
     Set(vstd::set::Set<ValueView>),
     Object(ObjectView),
     Undefined,
+}
+
+impl FromSpecImpl<bool> for Value {
+    open spec fn obeys_from_spec() -> bool {
+        false
+    }
+
+    closed spec fn from_spec(value: bool) -> Value {
+        Value::Bool(value)
+    }
+}
+
+impl FromSpecImpl<Number> for Value {
+    open spec fn obeys_from_spec() -> bool {
+        false
+    }
+
+    closed spec fn from_spec(value: Number) -> Value {
+        Value::Number(value)
+    }
+}
+
+impl FromSpecImpl<Vec<Value>> for Value {
+    open spec fn obeys_from_spec() -> bool {
+        false
+    }
+
+    closed spec fn from_spec(values: Vec<Value>) -> Value {
+        Value::Array(crate::Rc::new(
+            <Array as FromSpec<Vec<Value>>>::from_spec(values),
+        ))
+    }
+}
+
+impl FromSpecImpl<BTreeSet<Value>> for Value {
+    open spec fn obeys_from_spec() -> bool {
+        false
+    }
+
+    closed spec fn from_spec(values: BTreeSet<Value>) -> Value {
+        Value::Set(crate::Rc::new(
+            <crate::value::Set as FromSpec<BTreeSet<Value>>>::from_spec(values),
+        ))
+    }
 }
 
 } // end verus!

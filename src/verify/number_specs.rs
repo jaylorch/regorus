@@ -105,6 +105,129 @@ impl NumberView {
         }
     }
 
+    pub open spec fn as_u128_ensures(self: Self, result: Option<u128>) -> bool
+    {
+        match self {
+            NumberView::Integer(value) => {
+                if 0 <= value <= u128::MAX {
+                    result matches Some(actual) && actual as int == value
+                } else {
+                    result is None
+                }
+            },
+            NumberView::Float(value) => {
+                if value.is_finite_spec()
+                   && value.ieee_ge(0.0f64)
+                   && spec_f64_fract(value).eq_spec(&0.0f64)
+                   && ieee_float_cast::<u128, f64>(
+                       ieee_float_cast::<f64, u128>(value),
+                   ).eq_spec(&value) {
+                    result matches Some(actual)
+                        && actual == ieee_float_cast::<f64, u128>(value)
+                } else {
+                    result is None
+                }
+            },
+        }
+    }
+
+    pub open spec fn as_i128_ensures(self: Self, result: Option<i128>) -> bool
+    {
+        match self {
+            NumberView::Integer(value) => {
+                if i128::MIN <= value <= i128::MAX {
+                    result matches Some(actual) && actual as int == value
+                } else {
+                    result is None
+                }
+            },
+            NumberView::Float(value) => {
+                if value.is_finite_spec()
+                   && spec_f64_fract(value).eq_spec(&0.0f64)
+                   && ieee_float_cast::<i128, f64>(
+                       ieee_float_cast::<f64, i128>(value),
+                   ).eq_spec(&value) {
+                    result matches Some(actual)
+                        && actual == ieee_float_cast::<f64, i128>(value)
+                } else {
+                    result is None
+                }
+            },
+        }
+    }
+
+    pub open spec fn as_u64_ensures(self: Self, result: Option<u64>) -> bool
+    {
+        match self {
+            NumberView::Integer(value) => {
+                if 0 <= value <= u64::MAX {
+                    result matches Some(actual) && actual as int == value
+                } else {
+                    result is None
+                }
+            },
+            NumberView::Float(value) => {
+                if value.is_finite_spec()
+                   && value.ieee_ge(0.0f64)
+                   && spec_f64_fract(value).eq_spec(&0.0f64)
+                   && value.ieee_le(ieee_float_cast::<u64, f64>(u64::MAX))
+                   && ieee_float_cast::<u64, f64>(
+                       ieee_float_cast::<f64, u64>(value),
+                   ).eq_spec(&value) {
+                    result matches Some(actual)
+                        && actual == ieee_float_cast::<f64, u64>(value)
+                } else {
+                    result is None
+                }
+            },
+        }
+    }
+
+    pub open spec fn as_i64_ensures(self: Self, result: Option<i64>) -> bool
+    {
+        match self {
+            NumberView::Integer(value) => {
+                if i64::MIN <= value <= i64::MAX {
+                    result matches Some(actual) && actual as int == value
+                } else {
+                    result is None
+                }
+            },
+            NumberView::Float(value) => {
+                if value.is_finite_spec()
+                   && spec_f64_fract(value).eq_spec(&0.0f64)
+                   && value.ieee_ge(ieee_float_cast::<i64, f64>(i64::MIN))
+                   && value.ieee_le(ieee_float_cast::<i64, f64>(i64::MAX))
+                   && ieee_float_cast::<i64, f64>(
+                       ieee_float_cast::<f64, i64>(value),
+                   ).eq_spec(&value) {
+                    result matches Some(actual)
+                        && actual == ieee_float_cast::<f64, i64>(value)
+                } else {
+                    result is None
+                }
+            },
+        }
+    }
+
+    pub open spec fn as_f64_ensures(self: Self, result: Option<f64>) -> bool
+    {
+        match (self, result) {
+            (NumberView::Float(value), Some(actual)) =>
+                value.is_finite_spec() && actual == value,
+            (NumberView::Float(value), None) => !value.is_finite_spec(),
+            (number @ NumberView::Integer(value), Some(actual)) => {
+                &&& -9_007_199_254_740_992 <= value <= 9_007_199_254_740_992
+                &&& number.to_f64_lossy_ensures(actual)
+            },
+            // The bounds intentionally overlap at +/-2^53: primitive variants return
+            // Some there, while a BigInt variant with the same NumberView returns None.
+            (NumberView::Integer(value), None) => {
+                value <= -9_007_199_254_740_992 || 9_007_199_254_740_992 <= value
+            },
+        }
+    }
+
     pub open spec fn add_ensures(self: Self, rhs: Self, result: Self) -> bool
     {
         match (self, rhs) {

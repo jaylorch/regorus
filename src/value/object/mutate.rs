@@ -7,12 +7,15 @@
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use vstd::prelude::*;
 
 use super::{Object, Repr};
 use crate::value::Value;
 
+#[verus_verify]
 impl Object {
     /// Insert a key-value pair. Returns the previous value if any.
+    #[verus_verify(external)]
     pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
         match core::mem::take(&mut self.repr) {
             Repr::Empty => {
@@ -40,6 +43,7 @@ impl Object {
         }
     }
 
+    #[verus_verify(external)]
     pub fn remove(&mut self, key: &Value) -> Option<Value> {
         match core::mem::take(&mut self.repr) {
             Repr::Empty => {
@@ -64,6 +68,7 @@ impl Object {
         }
     }
 
+    #[verus_verify(external)]
     pub fn retain<F>(&mut self, mut f: F)
     where
         F: FnMut(&Value, &mut Value) -> bool,
@@ -84,10 +89,15 @@ impl Object {
     }
 
     #[inline]
+    #[verus_spec(
+        ensures
+            final(self)@ == super::ObjectStorageView::Empty,
+    )]
     pub fn clear(&mut self) {
         self.repr = Repr::Empty;
     }
 
+    #[verus_verify(external)]
     pub fn append(&mut self, other: &mut Object) {
         let drained: Vec<(Value, Value)> = match core::mem::take(&mut other.repr) {
             Repr::Empty => Vec::new(),
@@ -102,6 +112,7 @@ impl Object {
 
     /// Gets a mutable reference to the value associated with `key`, inserting
     /// the result of `default()` if absent.
+    #[verus_verify(external)]
     pub fn get_or_insert_with<F: FnOnce() -> Value>(
         &mut self,
         key: Value,

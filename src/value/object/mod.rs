@@ -74,14 +74,25 @@ impl Default for Repr {
     }
 }
 
+#[verus_verify]
 impl Object {
     /// Create an empty `Object`.
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            result@ == ObjectStorageView::Empty,
+    )]
     pub const fn new() -> Self {
         Self { repr: Repr::Empty }
     }
 
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            result as int == object_len(*self),
+            vstd::std_specs::btree::key_obeys_cmp_spec::<Value>() ==>
+                result as int == object_storage_len(self@),
+    )]
     pub fn len(&self) -> usize {
         match &self.repr {
             Repr::Empty => 0,
@@ -91,10 +102,17 @@ impl Object {
     }
 
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            result <==> object_len(*self) == 0,
+            vstd::std_specs::btree::key_obeys_cmp_spec::<Value>() ==>
+                (result <==> object_storage_len(self@) == 0),
+    )]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[verus_verify(external)]
     pub fn get(&self, key: &Value) -> Option<&Value> {
         match &self.repr {
             Repr::Empty => None,
@@ -107,10 +125,12 @@ impl Object {
     }
 
     #[inline]
+    #[verus_verify(external)]
     pub fn contains_key(&self, key: &Value) -> bool {
         self.get(key).is_some()
     }
 
+    #[verus_verify(external)]
     pub fn get_mut(&mut self, key: &Value) -> Option<&mut Value> {
         // Returning `&mut Value` for an existing key is a value-only mutation:
         // it never reorders or removes keys, so `Frozen` storage is preserved
@@ -131,6 +151,7 @@ impl Object {
     /// but callers MUST NOT depend on that. Use [`Object::iter_sorted`] when
     /// deterministic order is required, or [`Object::cursor`] when iteration
     /// must yield and resume.
+    #[verus_verify(external)]
     pub fn iter(&self) -> impl Iterator<Item = (&Value, &Value)> + '_ {
         self.iter_sorted()
     }
@@ -140,6 +161,7 @@ impl Object {
     /// Use this for serialization, snapshots, hashing, `Debug`, the
     /// `object.keys` builtin, etc.
     #[inline]
+    #[verus_verify(external)]
     pub fn iter_sorted(&self) -> Iter<'_> {
         Iter {
             inner: match &self.repr {
@@ -150,19 +172,23 @@ impl Object {
         }
     }
 
+    #[verus_verify(external)]
     pub fn keys(&self) -> impl Iterator<Item = &Value> + '_ {
         self.iter_sorted().map(|(k, _)| k)
     }
 
+    #[verus_verify(external)]
     pub fn keys_sorted(&self) -> impl Iterator<Item = &Value> + '_ {
         self.iter_sorted().map(|(k, _)| k)
     }
 
+    #[verus_verify(external)]
     pub fn values(&self) -> impl Iterator<Item = &Value> + '_ {
         self.iter_sorted().map(|(_, v)| v)
     }
 
     #[inline]
+    #[verus_verify(external)]
     pub fn iter_mut(&mut self) -> IterMut<'_> {
         // Frozen storage is read-only, so thaw it in place before handing out
         // mutable element references. After this, repr is never Frozen.
@@ -235,7 +261,16 @@ impl FromIterator<(Value, Value)> for Object {
     }
 }
 
+#[verus_verify]
 impl From<BTreeMap<Value, Value>> for Object {
+    #[verus_spec(result =>
+        ensures
+            result@ == if map@.is_empty() {
+                ObjectStorageView::Empty
+            } else {
+                ObjectStorageView::BTree(map@)
+            },
+    )]
     fn from(map: BTreeMap<Value, Value>) -> Self {
         if map.is_empty() {
             Self { repr: Repr::Empty }
@@ -252,4 +287,58 @@ impl From<Object> for Value {
     fn from(o: Object) -> Self {
         o.into_value()
     }
+}
+
+#[cfg(verus_keep_ghost)]
+verus! {
+
+use vstd::std_specs::convert::*;
+
+pub enum ObjectStorageView {
+    Empty,
+    Frozen(Seq<(Value, Value)>),
+    BTree(vstd::map::Map<Value, Value>),
+}
+
+impl FromSpecImpl<BTreeMap<Value, Value>> for Object {
+    open spec fn obeys_from_spec() -> bool {
+        false
+    }
+
+    uninterp spec fn from_spec(map: BTreeMap<Value, Value>) -> Object;
+}
+
+pub closed spec fn object_storage_view(object: Object) -> ObjectStorageView {
+    match object.repr {
+        Repr::Empty => ObjectStorageView::Empty,
+        Repr::Frozen(entries) => ObjectStorageView::Frozen(entries@),
+        Repr::BTree(entries) => ObjectStorageView::BTree(entries@),
+    }
+}
+
+pub closed spec fn object_len(object: Object) -> int {
+    match object.repr {
+        Repr::Empty => 0,
+        Repr::Frozen(entries) => entries@.len() as int,
+        Repr::BTree(entries) =>
+            vstd::std_specs::btree::spec_btree_map_len(&entries) as int,
+    }
+}
+
+pub open spec fn object_storage_len(view: ObjectStorageView) -> nat {
+    match view {
+        ObjectStorageView::Empty => 0,
+        ObjectStorageView::Frozen(entries) => entries.len(),
+        ObjectStorageView::BTree(entries) => entries.dom().len(),
+    }
+}
+
+impl View for Object {
+    type V = ObjectStorageView;
+
+    open(crate) spec fn view(&self) -> Self::V {
+        object_storage_view(*self)
+    }
+}
+
 }

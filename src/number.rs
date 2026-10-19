@@ -490,26 +490,7 @@ impl PartialOrd for Number {
 impl Number {
     #[verus_spec(result =>
         ensures
-            match self@ {
-                NumberView::Integer(n) => {
-                    if 0 <= n <= u128::MAX {
-                        result matches Some(value) && value as int == n
-                    } else {
-                        result is None
-                    }
-                },
-                NumberView::Float(f) => {
-                    if f.is_finite_spec()
-                       && f.ieee_ge(0.0f64)
-                       && spec_f64_fract(f).eq_spec(&0.0f64)
-                       && ieee_float_cast::<u128, f64>(ieee_float_cast::<f64, u128>(f)).eq_spec(&f) {
-                        result matches Some(value) && value == ieee_float_cast::<f64, u128>(f)
-                    }
-                    else {
-                        result is None
-                    }
-                },
-            },
+            self@.as_u128_ensures(result),
     )]
     pub fn as_u128(&self) -> Option<u128> {
         proof! {
@@ -537,25 +518,7 @@ impl Number {
 
     #[verus_spec(result =>
         ensures
-            match self@ {
-                NumberView::Integer(n) => {
-                    if i128::MIN <= n <= i128::MAX {
-                        result matches Some(value) && value as int == n
-                    } else {
-                        result is None
-                    }
-                },
-                NumberView::Float(f) => {
-                    if f.is_finite_spec()
-                       && spec_f64_fract(f).eq_spec(&0.0f64)
-                       && ieee_float_cast::<i128, f64>(ieee_float_cast::<f64, i128>(f)).eq_spec(&f) {
-                        result matches Some(value) && value == ieee_float_cast::<f64, i128>(f)
-                    }
-                    else {
-                        result is None
-                    }
-                },
-            },
+            self@.as_i128_ensures(result),
     )]
     pub fn as_i128(&self) -> Option<i128> {
         proof! {
@@ -580,27 +543,7 @@ impl Number {
 
     #[verus_spec(result =>
         ensures
-            match self@ {
-                NumberView::Integer(n) => {
-                    if 0 <= n <= u64::MAX {
-                        result matches Some(value) && value as int == n
-                    } else {
-                        result is None
-                    }
-                },
-                NumberView::Float(f) => {
-                    if f.is_finite_spec()
-                       && f.ieee_ge(0.0f64)
-                       && spec_f64_fract(f).eq_spec(&0.0f64)
-                       && f.ieee_le(ieee_float_cast::<u64, f64>(u64::MAX))
-                       && ieee_float_cast::<u64, f64>(ieee_float_cast::<f64, u64>(f)).eq_spec(&f) {
-                        result matches Some(value) && value == ieee_float_cast::<f64, u64>(f)
-                    }
-                    else {
-                        result is None
-                    }
-                },
-            },
+            self@.as_u64_ensures(result),
     )]
     pub fn as_u64(&self) -> Option<u64> {
         proof! {
@@ -628,27 +571,7 @@ impl Number {
 
     #[verus_spec(result =>
         ensures
-            match self@ {
-                NumberView::Integer(n) => {
-                    if i64::MIN <= n <= i64::MAX {
-                        result matches Some(value) && value as int == n
-                    } else {
-                        result is None
-                    }
-                },
-                NumberView::Float(f) => {
-                    if f.is_finite_spec()
-                       && spec_f64_fract(f).eq_spec(&0.0f64)
-                       && f.ieee_ge(ieee_float_cast::<i64, f64>(i64::MIN))
-                       && f.ieee_le(ieee_float_cast::<i64, f64>(i64::MAX))
-                       && ieee_float_cast::<i64, f64>(ieee_float_cast::<f64, i64>(f)).eq_spec(&f) {
-                        result matches Some(value) && value == ieee_float_cast::<f64, i64>(f)
-                    }
-                    else {
-                        result is None
-                    }
-                },
-            },
+            self@.as_i64_ensures(result),
     )]
     pub fn as_i64(&self) -> Option<i64> {
         proof! {
@@ -680,19 +603,7 @@ impl Number {
 
     #[verus_spec(result =>
         ensures
-            match (self@, result) {
-                (NumberView::Float(f), Some(value)) => f.is_finite_spec() && value == f,
-                (NumberView::Float(f), None) => !f.is_finite_spec(),
-                (NumberView::Integer(n), Some(value)) => {
-                    &&& -9_007_199_254_740_992 <= n <= 9_007_199_254_740_992
-                    &&& self@.to_f64_lossy_ensures(value)
-                },
-                // The bounds intentionally overlap at +/-2^53: primitive variants return
-                // Some there, while a BigInt variant with the same NumberView returns None.
-                (NumberView::Integer(n), None) => {
-                    n <= -9_007_199_254_740_992 || 9_007_199_254_740_992 <= n
-                },
-            },
+            self@.as_f64_ensures(result),
     )]
     pub fn as_f64(&self) -> Option<f64> {
         proof! {

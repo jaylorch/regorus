@@ -37,9 +37,14 @@ pub struct Set {
     inner: BTreeSet<Value>,
 }
 
+#[verus_verify]
 impl Set {
     /// Create an empty `Set`.
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            result@ == vstd::set::Set::<Value>::empty(),
+    )]
     pub const fn new() -> Self {
         Self {
             inner: BTreeSet::new(),
@@ -47,33 +52,58 @@ impl Set {
     }
 
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            result == set_len(*self),
+            vstd::std_specs::btree::key_obeys_cmp_spec::<Value>() ==>
+                result == self@.len(),
+    )]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            result <==> self@.len() == 0,
+    )]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            vstd::std_specs::btree::key_obeys_cmp_spec::<Value>() ==>
+                result == self@.contains(*value),
+    )]
     pub fn contains(&self, value: &Value) -> bool {
         self.inner.contains(value)
     }
 
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            vstd::std_specs::btree::key_obeys_cmp_spec::<Value>() ==>
+                match result {
+                    Some(found) => self@.contains(*found) && *value == *found,
+                    None => !self@.contains(*value),
+                },
+    )]
     pub fn get(&self, value: &Value) -> Option<&Value> {
         self.inner.get(value)
     }
 
     /// First element in sorted order (by `Value::Ord`).
     #[inline]
+    #[verus_verify(external)]
     pub fn first(&self) -> Option<&Value> {
         self.iter_sorted().next()
     }
 
     /// Last element in sorted order (by `Value::Ord`).
     #[inline]
+    #[verus_verify(external)]
     pub fn last(&self) -> Option<&Value> {
         self.iter_sorted().next_back()
     }
@@ -85,6 +115,7 @@ impl Set {
     /// deterministic order is required, or [`Set::cursor`] when iteration
     /// must yield and resume.
     #[inline]
+    #[verus_verify(external)]
     pub fn iter(&self) -> Iter<'_> {
         Iter {
             inner: self.inner.iter(),
@@ -95,6 +126,7 @@ impl Set {
     ///
     /// Use this for serialization, snapshots, hashing, `Debug`, etc.
     #[inline]
+    #[verus_verify(external)]
     pub fn iter_sorted(&self) -> Iter<'_> {
         // BTree backend iterates sorted natively.
         Iter {
@@ -104,16 +136,31 @@ impl Set {
 
     /// Insert `value`. Returns `true` if the value was newly inserted.
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            vstd::std_specs::btree::key_obeys_cmp_spec::<Value>() ==> {
+                &&& final(self)@ == old(self)@.insert(value)
+                &&& result == !old(self)@.contains(value)
+            },
+    )]
     pub fn insert(&mut self, value: Value) -> bool {
         self.inner.insert(value)
     }
 
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            vstd::std_specs::btree::key_obeys_cmp_spec::<Value>() ==> {
+                &&& final(self)@ == old(self)@.remove(*value)
+                &&& result == old(self)@.contains(*value)
+            },
+    )]
     pub fn remove(&mut self, value: &Value) -> bool {
         self.inner.remove(value)
     }
 
     #[inline]
+    #[verus_verify(external)]
     pub fn retain<F>(&mut self, f: F)
     where
         F: FnMut(&Value) -> bool,
@@ -122,17 +169,23 @@ impl Set {
     }
 
     #[inline]
+    #[verus_spec(
+        ensures
+            final(self)@ == vstd::set::Set::<Value>::empty(),
+    )]
     pub fn clear(&mut self) {
         self.inner.clear();
     }
 
     #[inline]
+    #[verus_verify(external)]
     pub fn append(&mut self, other: &mut Set) {
         self.inner.append(&mut other.inner);
     }
 
     /// Set intersection. Returns a new `Set` containing the elements
     /// present in both `self` and `other`.
+    #[verus_verify(external)]
     pub fn intersection(&self, other: &Set) -> Set {
         Set {
             inner: self.inner.intersection(&other.inner).cloned().collect(),
@@ -141,6 +194,7 @@ impl Set {
 
     /// Set union. Returns a new `Set` containing the elements present in
     /// either `self` or `other`.
+    #[verus_verify(external)]
     pub fn union(&self, other: &Set) -> Set {
         Set {
             inner: self.inner.union(&other.inner).cloned().collect(),
@@ -149,6 +203,7 @@ impl Set {
 
     /// Set difference. Returns a new `Set` containing the elements present
     /// in `self` but not in `other`.
+    #[verus_verify(external)]
     pub fn difference(&self, other: &Set) -> Set {
         Set {
             inner: self.inner.difference(&other.inner).cloned().collect(),
@@ -156,12 +211,17 @@ impl Set {
     }
 
     #[inline]
+    #[verus_verify(external)]
     pub fn is_subset(&self, other: &Set) -> bool {
         self.inner.is_subset(&other.inner)
     }
 
     /// Wrap into a `Value::Set`.
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            result@ == ValueView::Set(value_set_view(self)),
+    )]
     pub fn into_value(self) -> Value {
         Value::Set(crate::Rc::new(self))
     }
@@ -176,6 +236,10 @@ impl Set {
     /// between `next()` calls is not rejected by the borrow checker; the
     /// resulting iteration order in that case is unspecified.
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            result@ is None,
+    )]
     pub const fn cursor(&self) -> SetCursor {
         SetCursor {
             inner: SetCursorInner::BTree(None),
@@ -184,6 +248,7 @@ impl Set {
 
     /// Advance `cursor` and yield the next element. O(log n) for the BTree
     /// backend (range probe); future hash/inline variants may be O(1).
+    #[verus_verify(external)]
     pub fn next<'a>(&'a self, cursor: &mut SetCursor) -> Option<&'a Value> {
         let SetCursorInner::BTree(ref mut last) = cursor.inner;
         let next = last.as_ref().map_or_else(
@@ -207,11 +272,15 @@ impl Set {
 ///
 /// Self-owned: holds no borrow on the `Set`, so it can be stored as a
 /// field of a long-lived state struct (e.g. an RVM iteration frame).
+#[verus_verify]
+#[verus_verify(external_derive)]
 #[derive(Debug, Clone)]
 pub struct SetCursor {
     inner: SetCursorInner,
 }
 
+#[verus_verify]
+#[verus_verify(external_derive)]
 #[derive(Debug, Clone)]
 enum SetCursorInner {
     /// BTree backend cursor: tracks last-seen element. `None` means "before start".
@@ -259,15 +328,26 @@ impl FromIterator<Value> for Set {
     }
 }
 
+#[verus_verify]
 impl From<BTreeSet<Value>> for Set {
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            result@ == set@,
+            value_set_view(result) == value_btree_set_view(set),
+    )]
     fn from(set: BTreeSet<Value>) -> Self {
         Self { inner: set }
     }
 }
 
+#[verus_verify]
 impl From<Set> for Value {
     #[inline]
+    #[verus_spec(result =>
+        ensures
+            result@ == ValueView::Set(value_set_view(s)),
+    )]
     fn from(s: Set) -> Self {
         s.into_value()
     }
@@ -277,6 +357,41 @@ impl From<Set> for Value {
 verus! {
 
 use super::specs::ValueView;
+use vstd::std_specs::convert::*;
+
+impl FromSpecImpl<BTreeSet<Value>> for Set {
+    open spec fn obeys_from_spec() -> bool {
+        true
+    }
+
+    closed spec fn from_spec(set: BTreeSet<Value>) -> Set {
+        Set { inner: set }
+    }
+}
+
+impl FromSpecImpl<Set> for Value {
+    open spec fn obeys_from_spec() -> bool {
+        false
+    }
+
+    closed spec fn from_spec(set: Set) -> Value {
+        Value::Set(crate::Rc::new(set))
+    }
+}
+
+pub closed spec fn raw_set_view(s: Set) -> vstd::set::Set<Value> {
+    s.inner@
+}
+
+pub closed spec fn set_cursor_view(cursor: SetCursor) -> Option<Value> {
+    match cursor.inner {
+        SetCursorInner::BTree(last) => last,
+    }
+}
+
+pub closed spec fn set_len(s: Set) -> usize {
+    vstd::std_specs::btree::spec_btree_set_len(&s.inner)
+}
 
 pub closed spec fn value_set_view(s: Set) -> vstd::set::Set<ValueView>
     decreases
@@ -289,6 +404,28 @@ pub closed spec fn value_set_view(s: Set) -> vstd::set::Set<ValueView>
             ValueView::Undefined
         }
     )
+}
+
+pub closed spec fn value_btree_set_view(
+    values: BTreeSet<Value>,
+) -> vstd::set::Set<ValueView> {
+    value_set_view(Set { inner: values })
+}
+
+impl View for Set {
+    type V = vstd::set::Set<Value>;
+
+    open(crate) spec fn view(&self) -> Self::V {
+        raw_set_view(*self)
+    }
+}
+
+impl View for SetCursor {
+    type V = Option<Value>;
+
+    open spec fn view(&self) -> Self::V {
+        set_cursor_view(*self)
+    }
 }
 
 }

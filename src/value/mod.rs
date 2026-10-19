@@ -55,6 +55,15 @@ use vstd::prelude::*;
 
 use crate::*;
 
+#[cfg(verus_keep_ghost)]
+use self::array::value_seq_view;
+#[cfg(verus_keep_ghost)]
+use self::set::value_btree_set_view;
+#[cfg(verus_keep_ghost)]
+use self::specs::ValueView;
+#[cfg(verus_keep_ghost)]
+use crate::verify::number_specs::*;
+
 /// A value in a Rego document.
 ///
 /// Value is similar to a [`serde_json::value::Value`], but has the following additional
@@ -314,6 +323,7 @@ impl fmt::Display for Value {
     }
 }
 
+#[verus_verify]
 impl Value {
     /// Create an empty [`Value::Array`]
     ///
@@ -525,6 +535,7 @@ impl Value {
     }
 }
 
+#[verus_verify]
 impl From<bool> for Value {
     /// Create a [`Value::Bool`] from `bool`.
     /// ```
@@ -534,6 +545,10 @@ impl From<bool> for Value {
     /// assert_eq!(Value::from(true), Value::Bool(true));
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            result@ == ValueView::Bool(b),
+    )]
     fn from(b: bool) -> Self {
         Value::Bool(b)
     }
@@ -781,12 +796,18 @@ impl From<usize> for Value {
 }
 
 #[doc(hidden)]
+#[verus_verify]
 impl From<Number> for Value {
+    #[verus_spec(result =>
+        ensures
+            result@ == ValueView::Number(n@),
+    )]
     fn from(n: Number) -> Self {
         Value::Number(n)
     }
 }
 
+#[verus_verify]
 impl From<Vec<Value>> for Value {
     /// Create a [`Value::Array`] from a [`Vec<Value>`].
     /// ```
@@ -799,11 +820,16 @@ impl From<Vec<Value>> for Value {
     /// assert_eq!(v[1], Value::from(strings[1]));
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            result@ == ValueView::Array(value_seq_view(a@)),
+    )]
     fn from(a: Vec<Value>) -> Self {
         Value::Array(Rc::new(Array::from(a)))
     }
 }
 
+#[verus_verify]
 impl From<BTreeSet<Value>> for Value {
     /// Create a [`Value::Set`] from a [`BTreeSet<Value>`].
     /// ```
@@ -821,6 +847,10 @@ impl From<BTreeSet<Value>> for Value {
     /// assert_eq!(iter.next(), Some(&Value::from(strings[1])));
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            result@ == ValueView::Set(value_btree_set_view(s)),
+    )]
     fn from(s: BTreeSet<Value>) -> Self {
         Value::Set(Rc::new(Set::from(s)))
     }
@@ -874,6 +904,14 @@ impl Value {
     /// assert_eq!(v.as_bool()?, &true);
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match self@ {
+                ValueView::Bool(value) =>
+                    result matches Ok(found) && *found == value,
+                _ => result is Err,
+            },
+    )]
     pub fn as_bool(&self) -> Result<&bool> {
         match self {
             Value::Bool(b) => Ok(b),
@@ -889,6 +927,17 @@ impl Value {
     /// *v.as_bool_mut()? = false;
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match old(self)@ {
+                ValueView::Bool(value) =>
+                    result matches Ok(found) && {
+                        &&& *found == value
+                        &&& final(self)@ == ValueView::Bool(*final(found))
+                    },
+                _ => result is Err && final(self)@ == old(self)@,
+            },
+    )]
     pub fn as_bool_mut(&mut self) -> Result<&mut bool> {
         match self {
             Value::Bool(b) => Ok(b),
@@ -911,6 +960,16 @@ impl Value {
     /// assert!(v.as_u128().is_err());
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match (self, result) {
+                (Value::Number(number), Ok(value)) =>
+                    number@.as_u128_ensures(Some(value)),
+                (Value::Number(number), Err(_)) =>
+                    number@.as_u128_ensures(None),
+                _ => result is Err,
+            },
+    )]
     pub fn as_u128(&self) -> Result<u128> {
         match self {
             Value::Number(b) => {
@@ -938,6 +997,16 @@ impl Value {
     /// assert!(v.as_i128().is_err());
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match (self, result) {
+                (Value::Number(number), Ok(value)) =>
+                    number@.as_i128_ensures(Some(value)),
+                (Value::Number(number), Err(_)) =>
+                    number@.as_i128_ensures(None),
+                _ => result is Err,
+            },
+    )]
     pub fn as_i128(&self) -> Result<i128> {
         match self {
             Value::Number(b) => {
@@ -965,6 +1034,16 @@ impl Value {
     /// assert!(v.as_u64().is_err());
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match (self, result) {
+                (Value::Number(number), Ok(value)) =>
+                    number@.as_u64_ensures(Some(value)),
+                (Value::Number(number), Err(_)) =>
+                    number@.as_u64_ensures(None),
+                _ => result is Err,
+            },
+    )]
     pub fn as_u64(&self) -> Result<u64> {
         match self {
             Value::Number(b) => {
@@ -992,6 +1071,16 @@ impl Value {
     /// assert!(v.as_i64().is_err());
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match (self, result) {
+                (Value::Number(number), Ok(value)) =>
+                    number@.as_i64_ensures(Some(value)),
+                (Value::Number(number), Err(_)) =>
+                    number@.as_i64_ensures(None),
+                _ => result is Err,
+            },
+    )]
     pub fn as_i64(&self) -> Result<i64> {
         match self {
             Value::Number(b) => {
@@ -1019,6 +1108,21 @@ impl Value {
     /// assert!(v.as_u32().is_err());
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match (self, result) {
+                (Value::Number(number), Ok(value)) =>
+                    number@.as_u64_ensures(Some(value as u64)),
+                (Value::Number(number), Err(_)) => {
+                    ||| number@.as_u64_ensures(None)
+                    ||| exists|converted: u64| {
+                        &&& #[trigger] number@.as_u64_ensures(Some(converted))
+                        &&& (u32::MAX as u64) < converted
+                    }
+                },
+                _ => result is Err,
+            },
+    )]
     pub fn as_u32(&self) -> Result<u32> {
         match self {
             Value::Number(b) => {
@@ -1048,6 +1152,21 @@ impl Value {
     /// assert!(v.as_i32().is_err());
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match (self, result) {
+                (Value::Number(number), Ok(value)) =>
+                    number@.as_i64_ensures(Some(value as i64)),
+                (Value::Number(number), Err(_)) => {
+                    ||| number@.as_i64_ensures(None)
+                    ||| exists|converted: i64| {
+                        &&& #[trigger] number@.as_i64_ensures(Some(converted))
+                        &&& (converted < i32::MIN as i64 || (i32::MAX as i64) < converted)
+                    }
+                },
+                _ => result is Err,
+            },
+    )]
     pub fn as_i32(&self) -> Result<i32> {
         match self {
             Value::Number(b) => {
@@ -1077,6 +1196,21 @@ impl Value {
     /// assert!(v.as_u16().is_err());
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match (self, result) {
+                (Value::Number(number), Ok(value)) =>
+                    number@.as_u64_ensures(Some(value as u64)),
+                (Value::Number(number), Err(_)) => {
+                    ||| number@.as_u64_ensures(None)
+                    ||| exists|converted: u64| {
+                        &&& #[trigger] number@.as_u64_ensures(Some(converted))
+                        &&& (u16::MAX as u64) < converted
+                    }
+                },
+                _ => result is Err,
+            },
+    )]
     pub fn as_u16(&self) -> Result<u16> {
         match self {
             Value::Number(b) => {
@@ -1106,6 +1240,21 @@ impl Value {
     /// assert!(v.as_i16().is_err());
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match (self, result) {
+                (Value::Number(number), Ok(value)) =>
+                    number@.as_i64_ensures(Some(value as i64)),
+                (Value::Number(number), Err(_)) => {
+                    ||| number@.as_i64_ensures(None)
+                    ||| exists|converted: i64| {
+                        &&& #[trigger] number@.as_i64_ensures(Some(converted))
+                        &&& (converted < i16::MIN as i64 || (i16::MAX as i64) < converted)
+                    }
+                },
+                _ => result is Err,
+            },
+    )]
     pub fn as_i16(&self) -> Result<i16> {
         match self {
             Value::Number(b) => {
@@ -1135,6 +1284,21 @@ impl Value {
     /// assert!(v.as_u8().is_err());
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match (self, result) {
+                (Value::Number(number), Ok(value)) =>
+                    number@.as_u64_ensures(Some(value as u64)),
+                (Value::Number(number), Err(_)) => {
+                    ||| number@.as_u64_ensures(None)
+                    ||| exists|converted: u64| {
+                        &&& #[trigger] number@.as_u64_ensures(Some(converted))
+                        &&& (u8::MAX as u64) < converted
+                    }
+                },
+                _ => result is Err,
+            },
+    )]
     pub fn as_u8(&self) -> Result<u8> {
         match self {
             Value::Number(b) => {
@@ -1164,6 +1328,21 @@ impl Value {
     /// assert!(v.as_i8().is_err());
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match (self, result) {
+                (Value::Number(number), Ok(value)) =>
+                    number@.as_i64_ensures(Some(value as i64)),
+                (Value::Number(number), Err(_)) => {
+                    ||| number@.as_i64_ensures(None)
+                    ||| exists|converted: i64| {
+                        &&& #[trigger] number@.as_i64_ensures(Some(converted))
+                        &&& (converted < i8::MIN as i64 || (i8::MAX as i64) < converted)
+                    }
+                },
+                _ => result is Err,
+            },
+    )]
     pub fn as_i8(&self) -> Result<i8> {
         match self {
             Value::Number(b) => {
@@ -1192,6 +1371,17 @@ impl Value {
     /// assert!(v.as_i64().is_err());
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match (self, result) {
+                (Value::Number(number), Ok(value)) =>
+                    number@.as_f64_ensures(Some(value)),
+                (Value::Number(number), Err(_)) =>
+                    number@.as_f64_ensures(None),
+                (_, Err(_)) => true,
+                (_, Ok(_)) => false,
+            },
+    )]
     pub fn as_f64(&self) -> Result<f64> {
         match self {
             Value::Number(b) => {
@@ -1212,6 +1402,14 @@ impl Value {
     /// assert_eq!(v.as_string()?.as_ref(), "Hello");
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match self@ {
+                ValueView::String(value) =>
+                    result matches Ok(found) && (*found)@ == value,
+                _ => result is Err,
+            },
+    )]
     pub fn as_string(&self) -> Result<&Rc<str>> {
         match self {
             Value::String(s) => Ok(s),
@@ -1227,6 +1425,17 @@ impl Value {
     /// *v.as_string_mut()? = "World".into();
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match old(self)@ {
+                ValueView::String(value) =>
+                    result matches Ok(found) && {
+                        &&& (*found)@ == value
+                        &&& final(self)@ == ValueView::String((*final(found))@)
+                    },
+                _ => result is Err && final(self)@ == old(self)@,
+            },
+    )]
     pub fn as_string_mut(&mut self) -> Result<&mut Rc<str>> {
         match self {
             Value::String(s) => Ok(s),
@@ -1235,6 +1444,14 @@ impl Value {
     }
 
     #[doc(hidden)]
+    #[verus_spec(result =>
+        ensures
+            match self@ {
+                ValueView::Number(value) =>
+                    result matches Ok(found) && found@ == value,
+                _ => result is Err,
+            },
+    )]
     pub fn as_number(&self) -> Result<&Number> {
         match self {
             Value::Number(n) => Ok(n),
@@ -1243,6 +1460,17 @@ impl Value {
     }
 
     #[doc(hidden)]
+    #[verus_spec(result =>
+        ensures
+            match old(self)@ {
+                ValueView::Number(value) =>
+                    result matches Ok(found) && {
+                        &&& found@ == value
+                        &&& final(self)@ == ValueView::Number(final(found)@)
+                    },
+                _ => result is Err && final(self)@ == old(self)@,
+            },
+    )]
     pub fn as_number_mut(&mut self) -> Result<&mut Number> {
         match self {
             Value::Number(n) => Ok(n),
@@ -1258,6 +1486,14 @@ impl Value {
     /// assert_eq!(v.as_array()?[0], Value::from("Hello"));
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match self@ {
+                ValueView::Array(value) =>
+                    result matches Ok(found) && found@ == value,
+                _ => result is Err,
+            },
+    )]
     pub fn as_array(&self) -> Result<&Array> {
         match self {
             Value::Array(a) => Ok(a),
@@ -1273,6 +1509,7 @@ impl Value {
     /// v.as_array_mut()?.push(Value::from("World"));
     /// # Ok(())
     /// # }
+    #[verus_verify(external)]
     pub fn as_array_mut(&mut self) -> Result<&mut Array> {
         match self {
             Value::Array(a) => Ok(Rc::make_mut(a)),
@@ -1294,6 +1531,14 @@ impl Value {
     /// assert_eq!(v.as_set()?.first(), Some(&Value::from("Hello")));
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match self@ {
+                ValueView::Set(value) =>
+                    result matches Ok(found) && set::value_set_view(*found) == value,
+                _ => result is Err,
+            },
+    )]
     pub fn as_set(&self) -> Result<&Set> {
         match self {
             Value::Set(s) => Ok(s),
@@ -1315,6 +1560,7 @@ impl Value {
     /// v.as_set_mut()?.insert(Value::from("World"));
     /// # Ok(())
     /// # }
+    #[verus_verify(external)]
     pub fn as_set_mut(&mut self) -> Result<&mut Set> {
         match self {
             Value::Set(s) => Ok(Rc::make_mut(s)),
@@ -1339,6 +1585,14 @@ impl Value {
     /// );
     /// # Ok(())
     /// # }
+    #[verus_spec(result =>
+        ensures
+            match self@ {
+                ValueView::Object(value) =>
+                    result matches Ok(found) && proofs::object_view(*found) == value,
+                _ => result is Err,
+            },
+    )]
     pub fn as_object(&self) -> Result<&Object> {
         match self {
             Value::Object(m) => Ok(m),
@@ -1360,6 +1614,7 @@ impl Value {
     /// v.as_object_mut()?.insert(Value::from("Good"), Value::from("Bye"));
     /// # Ok(())
     /// # }
+    #[verus_verify(external)]
     pub fn as_object_mut(&mut self) -> Result<&mut Object> {
         match self {
             Value::Object(m) => Ok(Rc::make_mut(m)),

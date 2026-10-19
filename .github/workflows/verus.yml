@@ -11,9 +11,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-# This workflow only checks out code, downloads a pinned Verus release asset,
-# and runs verification. It never writes to the repository, so restrict the
-# GITHUB_TOKEN to read-only access to repository contents.
+# This workflow only checks out pinned code, downloads a pinned Verus release
+# asset, and runs verification. It never writes to the repository, so restrict
+# the GITHUB_TOKEN to read-only access to repository contents.
 permissions:
   contents: read
 
@@ -23,6 +23,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - name: Checkout matching Verus sources
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: verus-lang/verus
+        ref: aef82eda71838deef4a8cd0260fda6c9504be9b9
+        path: verus-source
+        fetch-depth: 1
     - name: Setup Rust toolchain
       uses: ./.github/actions/toolchains/rust
       with:
@@ -35,8 +42,8 @@ jobs:
       shell: bash
       run: |
         set -euxo pipefail
-        asset_url=https://github.com/verus-lang/verus/releases/download/release%2F0.2026.08.23.fbbbbcf/verus-0.2026.08.23.fbbbbcf-x86-linux.zip
-        asset_sha256=b65483714e6bf2ae72bfe7c7199e1c608495a941306b979260e9ed585d5899c9
+        asset_url=https://github.com/verus-lang/verus/releases/download/release%2F0.2026.09.20.aef82ed/verus-0.2026.09.20.aef82ed-x86-linux.zip
+        asset_sha256=7b870fa12bc589015c2fab60a8b3d9f07c7b1adb3444eb0fadffcbf7f0447b33
         test -n "$asset_url"
         curl -fsSL "$asset_url" -o verus.zip
 
@@ -76,5 +83,14 @@ jobs:
         # Put cargo-verus on PATH for the commands below.
         export PATH="$(dirname "$cargo_verus_bin"):$(dirname "$verus_bin"):$PATH"
         cargo verus --help
-        cargo fetch --locked
-        cargo verus verify --locked
+        cargo fetch --locked \
+          --config "patch.crates-io.vstd.path=\"$GITHUB_WORKSPACE/verus-source/source/vstd\"" \
+          --config "patch.crates-io.verus_builtin.path=\"$GITHUB_WORKSPACE/verus-source/source/builtin\"" \
+          --config "patch.crates-io.verus_builtin_macros.path=\"$GITHUB_WORKSPACE/verus-source/source/builtin_macros\""
+        # Work around https://github.com/verus-lang/verus/issues/2902.
+        cargo verus verify \
+          --config "patch.crates-io.vstd.path=\"$GITHUB_WORKSPACE/verus-source/source/vstd\"" \
+          --config "patch.crates-io.verus_builtin.path=\"$GITHUB_WORKSPACE/verus-source/source/builtin\"" \
+          --config "patch.crates-io.verus_builtin_macros.path=\"$GITHUB_WORKSPACE/verus-source/source/builtin_macros\"" \
+          -- \
+          --no-trait-conflicts
